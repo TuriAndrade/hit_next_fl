@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from contextlib import nullcontext
 from tqdm import tqdm
 
 
@@ -235,44 +236,50 @@ class SupervisedTrainer:
                 x = batch[0].to(self.device, non_blocking=True)
                 y = batch[1].to(self.device, non_blocking=True)
 
-                with self._autocast_context(use_amp):
-                    logits = self.model(x)
-                    loss = self.criterion(logits, y)
+                should_step = (step + 1) % accum_steps == 0 or (step + 1) == n_batches
 
-                batch_size = y.size(0)
-                loss_sum += float(loss.detach().item()) * batch_size
-                n_samples += batch_size
+                if self.ddp and train and not should_step:
+                    sync_context = self.model.no_sync()
+                else:
+                    sync_context = nullcontext()
 
-                if train:
-                    loss = loss / accum_steps
-                    if scaler is not None:
-                        scaler.scale(loss).backward()
-                    else:
-                        loss.backward()
+                with sync_context:
+                    with self._autocast_context(use_amp):
+                        logits = self.model(x)
+                        loss = self.criterion(logits, y)
 
-                    should_step = (step + 1) % accum_steps == 0 or (
-                        step + 1
-                    ) == n_batches
-                    if should_step:
-                        if grad_clip_norm is not None:
-                            if scaler is not None:
-                                scaler.unscale_(optimizer)
-                            torch.nn.utils.clip_grad_norm_(
-                                self.model.parameters(),
-                                grad_clip_norm,
-                            )
+                    batch_size = y.size(0)
+                    loss_sum += float(loss.detach().item()) * batch_size
+                    n_samples += batch_size
 
+                    if train:
+                        loss = loss / accum_steps
                         if scaler is not None:
-                            scaler.step(optimizer)
-                            scaler.update()
+                            scaler.scale(loss).backward()
                         else:
-                            optimizer.step()
-                        optimizer.zero_grad(set_to_none=True)
+                            loss.backward()
 
-                        if lr_scheduler is not None:
-                            latest_lr = lr_scheduler.step()
-                        if wd_scheduler is not None:
-                            latest_wd = wd_scheduler.step()
+                if train and should_step:
+                    if grad_clip_norm is not None:
+                        if scaler is not None:
+                            scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            grad_clip_norm,
+                        )
+
+                    if scaler is not None:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+
+                    optimizer.zero_grad(set_to_none=True)
+
+                    if lr_scheduler is not None:
+                        latest_lr = lr_scheduler.step()
+                    if wd_scheduler is not None:
+                        latest_wd = wd_scheduler.step()
 
                 if self.is_main_process:
                     running_loss = loss_sum / max(n_samples, 1)

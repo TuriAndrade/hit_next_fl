@@ -1,0 +1,11 @@
+h5py
+torch  
+pillow
+scipy
+numpy
+pandas
+matplotlib
+python-dotenv
+pytest
+timm
+einops

@@ -43,6 +43,10 @@ class ECGDataset(Dataset):
     If group=None:
         iterate through the entire dataset.
 
+    If n_samples is not None:
+        use a deterministic random subset of n_samples examples,
+        controlled by seed.
+
     ----------------------------------------------------------------------
 
     Expected CSV structure
@@ -92,6 +96,8 @@ class ECGDataset(Dataset):
         csv_metadata_cols: Sequence[str] = [],
         signal_crop_len: int = 2560,
         group: str | None = None,
+        n_samples: int | None = None,
+        seed: int = 0,
     ):
         if group is not None and group not in {"train", "val", "test"}:
             raise ValueError("group must be None, 'train', 'val', or 'test'.")
@@ -102,6 +108,8 @@ class ECGDataset(Dataset):
         self.csv_metadata_cols = list(csv_metadata_cols)
         self.signal_crop_len = signal_crop_len
         self.group = group
+        self.n_samples = n_samples
+        self.seed = seed
 
         self.h5_file = None
         self.signal_ds = None
@@ -156,6 +164,24 @@ class ECGDataset(Dataset):
                     dtype=np.int64,
                 )
 
+        if self.n_samples is not None:
+            if self.n_samples <= 0:
+                raise ValueError("n_samples must be positive.")
+
+            if self.n_samples > len(self.hdf5_indices):
+                raise ValueError(
+                    f"n_samples ({self.n_samples}) cannot be larger than "
+                    f"dataset size ({len(self.hdf5_indices)})."
+                )
+
+            generator = torch.Generator().manual_seed(self.seed)
+            selected_indices = torch.randperm(
+                len(self.hdf5_indices),
+                generator=generator,
+            )[: self.n_samples]
+
+            self.hdf5_indices = self.hdf5_indices[selected_indices.numpy()]
+
     def _center_crop(self, signal: np.ndarray) -> np.ndarray:
         length = signal.shape[0]
 
@@ -209,6 +235,7 @@ class ECGDataset(Dataset):
         csv_metadata_cols: Sequence[str] = [],
         signal_crop_len: int = 2560,
         group: str | None = None,
+        n_samples: int | None = None,
         batch_size: int = 256,
         num_workers: int = 4,
         rank: int = 0,
@@ -225,6 +252,8 @@ class ECGDataset(Dataset):
             csv_metadata_cols=csv_metadata_cols,
             signal_crop_len=signal_crop_len,
             group=group,
+            n_samples=n_samples,
+            seed=seed,
         )
 
         if world_size > 1:
@@ -274,6 +303,7 @@ if __name__ == "__main__":
             csv_metadata_cols=["exam_id", "patient_id"],
             signal_crop_len=2560,
             group="train",
+            n_samples=100,
             batch_size=8,
             num_workers=0,
             shuffle=True,
@@ -282,6 +312,7 @@ if __name__ == "__main__":
 
         x, y, metadata = next(iter(loader))
 
+        print("dataset size:", len(loader.dataset))
         print("x:", x.shape)
         print("y:", y)
         print("metadata:", metadata)
