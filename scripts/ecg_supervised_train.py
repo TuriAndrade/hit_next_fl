@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
+import os
 import argparse
 import gc
 import json
@@ -9,7 +10,6 @@ from pathlib import Path
 import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from dotenv import load_dotenv
 
 from config import config as configs
 from utils import save_config, set_seed, parse_args_json
@@ -28,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-val-samples", type=int, default=None)
     parser.add_argument("--n-test-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--save-name", type=str, default=None)
 
     # DDP
     parser.add_argument("--master-addr", type=str, default="127.0.0.1")
@@ -37,7 +38,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_args():
-    load_dotenv()
     return parse_args_json(_build_parser())
 
 
@@ -108,8 +108,12 @@ def _train_worker(rank: int, world_size: int, args) -> None:
 
     device = f"cuda:{rank}"
     save_dir = (
-        Path("experiments") / args.model_name / args.task_name / f"seed_{args.seed}"
+        Path(os.environ.get("SAVE_DIR", "experiments"))
+        / f"{args.model_name}-{args.task_name}-seed_{args.seed}"
     )
+
+    if args.save_name is not None:
+        save_dir = save_dir / args.save_name
 
     task = None
     train_loader = None
@@ -189,8 +193,9 @@ def _train_worker(rank: int, world_size: int, args) -> None:
     finally:
         _close_loader(train_loader)
         _close_loader(val_loader)
+        _close_loader(test_loader)
 
-        del task, train_loader, val_loader
+        del task, train_loader, val_loader, test_loader
         del trainer, optimizer, lr_scheduler, wd_scheduler
 
         gc.collect()

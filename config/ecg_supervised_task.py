@@ -304,10 +304,13 @@ class ECGMultilabelClassification(ECGSupervisedTask):
         if thresholds is None:
             thresholds = [
                 0.001,
+                0.003,
                 0.005,
                 0.01,
+                0.03,
                 0.05,
                 0.1,
+                0.3,
                 0.5,
             ]
 

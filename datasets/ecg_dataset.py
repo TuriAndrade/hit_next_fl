@@ -169,9 +169,9 @@ class ECGDataset(Dataset):
                 raise ValueError("n_samples must be positive.")
 
             if self.n_samples > len(self.hdf5_indices):
-                raise ValueError(
-                    f"n_samples ({self.n_samples}) cannot be larger than "
-                    f"dataset size ({len(self.hdf5_indices)})."
+                print(
+                    f"n_samples ({self.n_samples}) larger than dataset size ({len(self.hdf5_indices)})."
+                    f"using ({len(self.hdf5_indices)}) samples."
                 )
 
             generator = torch.Generator().manual_seed(self.seed)
