@@ -298,7 +298,7 @@ class ECGMultilabelClassification(ECGSupervisedTask):
         val_loader,
         test_loader,
         thresholds: list[float] | None = None,
-        threshold_metric: str = "acc",
+        threshold_metric: str = "f1",
         use_amp: bool | None = None,
     ) -> dict:
         if thresholds is None:
