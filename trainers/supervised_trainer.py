@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import timedelta
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -11,7 +11,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from contextlib import nullcontext
 from tqdm import tqdm
 
 
@@ -36,38 +35,6 @@ class SupervisedTrainer:
     # DDP helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def setup_ddp(
-        rank: int,
-        world_size: int,
-        master_addr: str = "127.0.0.1",
-        master_port: str | int = "29500",
-        backend: str = "nccl",
-        timeout_seconds: Optional[int] = None,
-    ) -> None:
-        if world_size <= 1:
-            return
-
-        if dist.is_available() and dist.is_initialized():
-            return
-
-        kwargs = dict(
-            backend=backend,
-            rank=rank,
-            world_size=world_size,
-            init_method=f"tcp://{master_addr}:{master_port}",
-        )
-
-        if timeout_seconds is not None:
-            kwargs["timeout"] = timedelta(seconds=timeout_seconds)
-
-        dist.init_process_group(**kwargs)
-
-    @staticmethod
-    def cleanup_ddp() -> None:
-        if dist.is_available() and dist.is_initialized():
-            dist.destroy_process_group()
-
-    @staticmethod
     def is_dist_ready() -> bool:
         return dist.is_available() and dist.is_initialized()
 
@@ -78,7 +45,6 @@ class SupervisedTrainer:
     def __init__(
         self,
         model: nn.Module,
-        criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         save_dir: str | Path,
         device: str | torch.device,
         rank: int = 0,
@@ -89,7 +55,6 @@ class SupervisedTrainer:
         self.world_size = world_size
         self.ddp = ddp and world_size > 1
         self.device = torch.device(device)
-        self.criterion = criterion
 
         if self.device.type != "cuda" or self.device.index is None:
             raise ValueError(
@@ -104,10 +69,7 @@ class SupervisedTrainer:
 
         if self.ddp:
             if not self.is_dist_ready():
-                raise RuntimeError(
-                    "ddp=True requires an initialized process group. "
-                    "Call SupervisedTrainer.setup_ddp(...) before creating the trainer."
-                )
+                raise RuntimeError("ddp=True requires an initialized process group. ")
 
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
@@ -180,12 +142,14 @@ class SupervisedTrainer:
 
         torch.save(checkpoint, self.save_dir / filename)
 
-    def _reduce_loss_sum(self, loss_sum: float, n_samples: int) -> tuple[float, int]:
+    def _reduce_metric_sum(
+        self, metric_sum: float, n_samples: int
+    ) -> tuple[float, int]:
         if not self.ddp:
-            return loss_sum, n_samples
+            return metric_sum, n_samples
 
         tensor = torch.tensor(
-            [loss_sum, float(n_samples)],
+            [metric_sum, float(n_samples)],
             dtype=torch.float64,
             device=self.device,
         )
@@ -196,10 +160,11 @@ class SupervisedTrainer:
     def _run_epoch(
         self,
         loader,
+        criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         optimizer: Optional[torch.optim.Optimizer],
         lr_scheduler: Any,
         wd_scheduler: Any,
-        scaler: Optional[torch.cuda.amp.GradScaler],
+        scaler: Optional[torch.amp.GradScaler],
         use_amp: bool,
         grad_clip_norm: float | None,
         epoch: int,
@@ -245,8 +210,8 @@ class SupervisedTrainer:
 
                 with sync_context:
                     with self._autocast_context(use_amp):
-                        logits = self.model(x)
-                        loss = self.criterion(logits, y)
+                        out = self.model(x)
+                        loss = criterion(out, y)
 
                     batch_size = y.size(0)
                     loss_sum += float(loss.detach().item()) * batch_size
@@ -287,7 +252,7 @@ class SupervisedTrainer:
 
         pbar.close()
 
-        loss_sum, n_samples = self._reduce_loss_sum(loss_sum, n_samples)
+        loss_sum, n_samples = self._reduce_metric_sum(loss_sum, n_samples)
         avg_loss = loss_sum / max(n_samples, 1)
 
         metrics = {
@@ -359,8 +324,9 @@ class SupervisedTrainer:
     def fit(
         self,
         train_loader,
+        optimizer: torch.optim.Optimizer,
+        criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         val_loader=None,
-        optimizer: Optional[torch.optim.Optimizer] = None,
         lr_scheduler: Any = None,
         wd_scheduler: Any = None,
         use_amp: bool = False,
@@ -382,7 +348,7 @@ class SupervisedTrainer:
         stopped_early = False
 
         if use_amp:
-            scaler = torch.cuda.amp.GradScaler()
+            scaler = torch.amp.GradScaler("cuda")
         else:
             scaler = None
 
@@ -394,6 +360,7 @@ class SupervisedTrainer:
 
             train_metrics = self._run_epoch(
                 loader=train_loader,
+                criterion=criterion,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
                 wd_scheduler=wd_scheduler,
@@ -409,6 +376,7 @@ class SupervisedTrainer:
             if val_loader is not None:
                 val_metrics = self._run_epoch(
                     loader=val_loader,
+                    criterion=criterion,
                     optimizer=None,
                     lr_scheduler=None,
                     wd_scheduler=None,
@@ -491,18 +459,55 @@ class SupervisedTrainer:
         return summary
 
     @torch.no_grad()
-    def evaluate(self, loader, save_name: str = "eval.json") -> Dict[str, float]:
-        metrics = self._run_epoch(
-            loader=loader,
-            optimizer=None,
-            lr_scheduler=None,
-            wd_scheduler=None,
-            scaler=None,
-            use_amp=False,
-            grad_clip_norm=None,
-            epoch=0,
-            train=False,
-            accum_steps=1,
+    def evaluate(
+        self,
+        loader,
+        metric: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        metric_name: str = "metric",
+        use_amp: bool = False,
+        verbose: bool = False,
+    ) -> Dict[str, float]:
+        self.model.eval()
+
+        metric_sum = 0.0
+        n_samples = 0
+
+        pbar = tqdm(
+            loader,
+            desc=f"[eval] {metric_name}",
+            unit="batch",
+            leave=False,
+            disable=not self.is_main_process or not verbose,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         )
-        self._save_json(metrics, save_name)
-        return metrics
+
+        for batch in pbar:
+            x = batch[0].to(self.device, non_blocking=True)
+            y = batch[1].to(self.device, non_blocking=True)
+
+            with self._autocast_context(use_amp):
+                out = self.model(x)
+                values = metric(out, y)
+
+            values = values.detach().float().view(-1)
+
+            metric_sum += values.sum().item()
+            n_samples += values.numel()
+
+            if self.is_main_process:
+                pbar.set_postfix(
+                    **{metric_name: f"{metric_sum / max(n_samples, 1):.6f}"}
+                )
+
+        pbar.close()
+
+        metric_sum, n_samples = self._reduce_metric_sum(metric_sum, n_samples)
+        avg_metric = metric_sum / max(n_samples, 1)
+
+        if self.is_main_process and verbose:
+            tqdm.write(f"Eval • {metric_name}={avg_metric:.6f}")
+
+        return {
+            metric_name: avg_metric,
+            "n": float(n_samples),
+        }

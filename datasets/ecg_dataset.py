@@ -280,39 +280,3 @@ class ECGDataset(Dataset):
             drop_last=drop_last,
             pin_memory=pin_memory,
         )
-
-
-if __name__ == "__main__":
-    import os
-
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    target_cols = ["1dAVb", "RBBB", "LBBB", "SB", "AF", "ST"]
-
-    for h5_path, csv_path in [
-        (os.environ["CODE15_H5_PATH"], os.environ["CODE15_CSV_PATH"]),
-        (os.environ["CHAPMAN_H5_PATH"], os.environ["CHAPMAN_CSV_PATH"]),
-        (os.environ["PTBXL_H5_PATH"], os.environ["PTBXL_CSV_PATH"]),
-    ]:
-        loader = ECGDataset.get_dataloader(
-            h5_path=h5_path,
-            csv_path=csv_path,
-            csv_target_cols=target_cols,
-            csv_metadata_cols=["exam_id", "patient_id"],
-            signal_crop_len=2560,
-            group="train",
-            n_samples=100,
-            batch_size=8,
-            num_workers=0,
-            shuffle=True,
-            seed=0,
-        )
-
-        x, y, metadata = next(iter(loader))
-
-        print("dataset size:", len(loader.dataset))
-        print("x:", x.shape)
-        print("y:", y)
-        print("metadata:", metadata)
