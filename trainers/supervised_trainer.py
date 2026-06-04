@@ -4,7 +4,7 @@ import json
 import math
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import torch
@@ -337,20 +337,20 @@ class SupervisedTrainer:
         early_stopping: bool = False,
         patience: int = 5,
         plot_interval: int = 5,
+        keep_best: bool = True,
         save_ckpt: bool = False,
         ckpt_name: str = "model.pt",
     ) -> Dict[str, Any]:
-        hist = []
+        hist: list[dict[str, Any]] = []
+
         best_loss = math.inf
         best_epoch = -1
         best_state_dict = None
+        best_record = None
         wait = 0
         stopped_early = False
 
-        if use_amp:
-            scaler = torch.amp.GradScaler("cuda")
-        else:
-            scaler = None
+        scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
         for epoch in range(1, epochs + 1):
             if hasattr(train_loader, "sampler") and hasattr(
@@ -394,6 +394,7 @@ class SupervisedTrainer:
                 **val_metrics,
             }
             hist.append(record)
+
             self._save_json({"history": hist}, "history.json")
 
             if epoch % plot_interval == 0:
@@ -406,57 +407,69 @@ class SupervisedTrainer:
                     best_loss = current_loss
                     best_epoch = epoch
                     best_state_dict = self._snapshot_state_dict()
+                    best_record = record
                     wait = 0
                 else:
                     wait += 1
 
                 if early_stopping and epoch >= min_epochs and wait >= patience:
                     stopped_early = True
+
                     if self.is_main_process:
                         tqdm.write(
                             f"Early stopping at epoch {epoch}. "
                             f"Best loss={best_loss:.6f} at epoch {best_epoch}."
                         )
-                    break
-            else:
-                best_loss = record["train_loss"]
-                best_epoch = epoch
-                best_state_dict = self._snapshot_state_dict()
 
-        last_epoch = hist[-1]["epoch"] if hist else 0
+                    break
+
+            else:
+                current_loss = record["train_loss"]
+
+                if current_loss < best_loss:
+                    best_loss = current_loss
+                    best_epoch = epoch
+                    best_state_dict = self._snapshot_state_dict()
+                    best_record = record
+
+        self._plot_history(hist)
+
+        if keep_best and best_state_dict is not None:
+            self.raw_model.load_state_dict(best_state_dict)
+
+        final_state_dict = self._snapshot_state_dict()
 
         if save_ckpt:
             self._save_checkpoint(
                 ckpt_name,
-                state_dict=best_state_dict or self._snapshot_state_dict(),
+                state_dict=final_state_dict,
                 history=hist,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
                 wd_scheduler=wd_scheduler,
-                extra={
-                    "epochs": last_epoch,
-                    "use_validation": val_loader is not None,
-                    "best_loss": best_loss,
-                },
             )
 
-        if best_state_dict is not None:
-            self.raw_model.load_state_dict(best_state_dict)
-
-        self._plot_history(hist)
+        last_record = hist[-1]
 
         summary = {
-            "epochs_ran": last_epoch,
-            "best_epoch": best_epoch,
-            "best_loss": best_loss,
+            "epochs_ran": last_record.get("epoch", 0),
+            "keep_best": keep_best,
+            "use_validation": val_loader is not None,
+            "best_record": best_record,
+            "last_record": last_record,
             "stopped_early": stopped_early,
             "ddp": self.ddp,
             "rank": self.rank,
             "world_size": self.world_size,
         }
+
         self._save_json(summary, "train_summary.json")
 
-        return summary
+        return {
+            "state_dict": final_state_dict,
+            "summary": summary,
+            "history": hist,
+        }
 
     @torch.no_grad()
     def evaluate(

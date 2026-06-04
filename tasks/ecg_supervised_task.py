@@ -38,6 +38,7 @@ class ECGSupervisedTask(ABC):
     min_epochs: int
     patience: int
     early_stopping: bool
+    keep_best: bool
     use_amp: bool
     grad_clip_norm: float | None
     plot_interval: int
@@ -170,6 +171,7 @@ class ECGSupervisedTask(ABC):
             "min_epochs": self.min_epochs,
             "accum_steps": self.compute_accum_steps(),
             "early_stopping": self.early_stopping,
+            "keep_best": self.keep_best,
             "patience": self.patience,
             "plot_interval": self.plot_interval,
             "save_ckpt": self.save_ckpt,

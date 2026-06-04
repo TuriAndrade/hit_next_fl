@@ -11,7 +11,7 @@ import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from config import config as configs
+from tasks import tasks
 from utils import save_config, set_seed, parse_args_json
 
 from datetime import timedelta
@@ -42,21 +42,21 @@ def _parse_args():
 
 
 def _build_task(args, world_size: int):
-    if args.model_name not in configs:
+    if args.model_name not in tasks:
         raise ValueError(
             f"Invalid model_name: {args.model_name}. "
-            f"Available models: {list(configs.keys())}"
+            f"Available models: {list(tasks.keys())}"
         )
 
-    model_configs = configs[args.model_name]
+    model_tasks = tasks[args.model_name]
 
-    if args.task_name not in model_configs:
+    if args.task_name not in model_tasks:
         raise ValueError(
             f"Invalid task_name: {args.task_name} for model "
-            f"{args.model_name}. Available tasks: {list(model_configs.keys())}"
+            f"{args.model_name}. Available tasks: {list(model_tasks.keys())}"
         )
 
-    return model_configs[args.task_name](
+    return model_tasks[args.task_name](
         model_extra_args=args.model_extra_args,
         task_extra_args=args.task_extra_args,
         n_train_samples=args.n_train_samples,
@@ -169,7 +169,7 @@ def _train_worker(rank: int, world_size: int, args) -> None:
                 path=save_dir / "config.json",
             )
 
-        summary = trainer.fit(
+        train_result = trainer.fit(
             train_loader=train_loader,
             criterion=task.criterion,
             val_loader=val_loader,
@@ -187,7 +187,7 @@ def _train_worker(rank: int, world_size: int, args) -> None:
 
         if rank == 0:
             save_config(eval_summary, save_dir / "eval_summary.json")
-            print(f"Finished seed {args.seed}: {summary}")
+            print(f"Finished seed {args.seed}: {train_result['summary']}")
             print(f"Evaluation: {eval_summary}")
 
     finally:
