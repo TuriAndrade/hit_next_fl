@@ -11,8 +11,13 @@ import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from tasks import tasks
-from utils import save_config, set_seed, parse_args_json
+from utils import (
+    canonical_dataset_name,
+    get_dataset_paths,
+    save_config,
+    set_seed,
+    parse_args_json,
+)
 
 from datetime import timedelta
 
@@ -21,7 +26,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Supervised ECG training.")
 
     parser.add_argument("--model-name", type=str, required=True)
-    parser.add_argument("--task-name", type=str, required=True)
+    parser.add_argument("--task-name", type=str, default="clf")
+    parser.add_argument("--dataset-name", type=str, required=True)
     parser.add_argument("--model-extra-args", type=json.loads, default={})
     parser.add_argument("--task-extra-args", type=json.loads, default={})
     parser.add_argument("--n-train-samples", type=int, default=None)
@@ -42,6 +48,8 @@ def _parse_args():
 
 
 def _build_task(args, world_size: int):
+    from tasks import tasks
+
     if args.model_name not in tasks:
         raise ValueError(
             f"Invalid model_name: {args.model_name}. "
@@ -56,7 +64,11 @@ def _build_task(args, world_size: int):
             f"{args.model_name}. Available tasks: {list(model_tasks.keys())}"
         )
 
+    h5_path, csv_path = get_dataset_paths(args.dataset_name)
+
     return model_tasks[args.task_name](
+        h5_path=h5_path,
+        csv_path=csv_path,
         model_extra_args=args.model_extra_args,
         task_extra_args=args.task_extra_args,
         n_train_samples=args.n_train_samples,
@@ -107,9 +119,10 @@ def _train_worker(rank: int, world_size: int, args) -> None:
     torch.cuda.set_device(rank)
 
     device = f"cuda:{rank}"
+    dataset_name = canonical_dataset_name(args.dataset_name)
     save_dir = (
         Path(os.environ.get("SAVE_DIR", "experiments"))
-        / f"{args.model_name}-{args.task_name}-seed_{args.seed}"
+        / f"{args.model_name}-{dataset_name}-{args.task_name}-seed_{args.seed}"
     )
 
     if args.save_name is not None:
@@ -218,6 +231,7 @@ def main() -> None:
     print(f"Using {world_size} GPU(s)")
     print(f"Model: {args.model_name}")
     print(f"Task: {args.task_name}")
+    print(f"Dataset: {canonical_dataset_name(args.dataset_name)}")
     print(f"Seed: {args.seed}")
 
     if world_size == 1:

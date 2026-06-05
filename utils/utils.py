@@ -7,6 +7,51 @@ import random
 import os
 
 
+DATASET_ENV_VARS = {
+    "code15": ("CODE15_H5_PATH", "CODE15_CSV_PATH"),
+    "ptbxl": ("PTBXL_H5_PATH", "PTBXL_CSV_PATH"),
+    "chapman": ("CHAPMAN_H5_PATH", "CHAPMAN_CSV_PATH"),
+    "chapman-shaoxing": ("CHAPMAN_H5_PATH", "CHAPMAN_CSV_PATH"),
+    "chapman_shaoxing": ("CHAPMAN_H5_PATH", "CHAPMAN_CSV_PATH"),
+}
+
+
+def canonical_dataset_name(dataset_name: str) -> str:
+    normalized = dataset_name.strip().lower()
+
+    if normalized in {"chapman-shaoxing", "chapman_shaoxing"}:
+        return "chapman"
+
+    if normalized not in DATASET_ENV_VARS:
+        raise ValueError(
+            f"Unknown dataset_name: {dataset_name}. "
+            f"Available datasets: {sorted(DATASET_ENV_VARS)}"
+        )
+
+    return normalized
+
+
+def get_dataset_paths(dataset_name: str) -> tuple[str, str]:
+    normalized = dataset_name.strip().lower()
+
+    if normalized not in DATASET_ENV_VARS:
+        raise ValueError(
+            f"Unknown dataset_name: {dataset_name}. "
+            f"Available datasets: {sorted(DATASET_ENV_VARS)}"
+        )
+
+    h5_env, csv_env = DATASET_ENV_VARS[normalized]
+    h5_path = os.getenv(h5_env)
+    csv_path = os.getenv(csv_env)
+
+    if not h5_path:
+        raise ValueError(f"Missing environment variable: {h5_env}")
+    if not csv_path:
+        raise ValueError(f"Missing environment variable: {csv_env}")
+
+    return h5_path, csv_path
+
+
 def set_seed(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
 

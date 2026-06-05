@@ -7,7 +7,6 @@ from pathlib import Path
 
 import torch
 
-from datasets import ECGDataset
 from optimizers import AdamW
 from trainers import SupervisedTrainer
 from tqdm import tqdm
@@ -61,6 +60,8 @@ class ECGSupervisedTask(ABC):
         rank: int,
         world_size: int,
     ):
+        from datasets import ECGDataset
+
         return ECGDataset.get_dataloader(
             h5_path=self.h5_path,
             csv_path=self.csv_path,
