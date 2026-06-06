@@ -11,6 +11,7 @@ import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
+from tasks import get_task_definition
 from utils import (
     canonical_dataset_name,
     get_dataset_paths,
@@ -47,29 +48,17 @@ def _parse_args():
     return parse_args_json(_build_parser())
 
 
-def _build_task(args, world_size: int):
-    from tasks import tasks
-
-    if args.model_name not in tasks:
-        raise ValueError(
-            f"Invalid model_name: {args.model_name}. "
-            f"Available models: {list(tasks.keys())}"
-        )
-
-    model_tasks = tasks[args.model_name]
-
-    if args.task_name not in model_tasks:
-        raise ValueError(
-            f"Invalid task_name: {args.task_name} for model "
-            f"{args.model_name}. Available tasks: {list(model_tasks.keys())}"
-        )
-
+def _create_task(args, world_size: int):
+    task_definition = get_task_definition(
+        args.model_name,
+        args.task_name,
+    )
     h5_path, csv_path = get_dataset_paths(args.dataset_name)
-
-    return model_tasks[args.task_name](
+    model = task_definition.create_model(args.model_extra_args)
+    return task_definition.create_task(
+        model=model,
         h5_path=h5_path,
         csv_path=csv_path,
-        model_extra_args=args.model_extra_args,
         task_extra_args=args.task_extra_args,
         n_train_samples=args.n_train_samples,
         n_val_samples=args.n_val_samples,
@@ -148,7 +137,7 @@ def _train_worker(rank: int, world_size: int, args) -> None:
     try:
         set_seed(args.seed)
 
-        task = _build_task(args, world_size)
+        task = _create_task(args, world_size)
         accum_steps = task.compute_accum_steps()
 
         train_loader, val_loader, test_loader = task.make_loaders(

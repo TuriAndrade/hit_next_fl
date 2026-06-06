@@ -3,30 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 from models import ECGHiTNeXt
+
 from .ecg_supervised_task import ECGMultilabelClassification
 
 
-def clf_config(
-    h5_path: Path | str,
-    csv_path: Path | str,
+def create_model(
     model_extra_args: dict | None = None,
-    task_extra_args: dict | None = None,
-    n_train_samples: int | None = None,
-    n_val_samples: int | None = None,
-    n_test_samples: int | None = None,
-    world_size: int = 1,
-) -> ECGMultilabelClassification:
-    model_extra_args = model_extra_args or {}
-    task_extra_args = task_extra_args or {}
-
-    ecg_size = (2560, 12)
-    target_cols = ["1dAVb", "RBBB", "LBBB", "SB", "AF", "ST"]
-    out_dim = len(target_cols)
-
+) -> ECGHiTNeXt:
     model_kwargs = {
-        "ecg_size": ecg_size,
+        "ecg_size": ECGMultilabelClassification.ECG_SIZE,
         "num_stages": 4,
         "hidden_dim": [96, 192, 384, 768],
         "layers": [4, 4, 12, 4],
@@ -48,20 +36,32 @@ def clf_config(
         "shift_size": None,
         "apply_out_mlp": True,
         "out_mlp_hidden_dim": [512],
-        "out_mlp_out_dim": out_dim,
+        "out_mlp_out_dim": len(ECGMultilabelClassification.TARGET_CLF_COLUMNS),
         "out_mlp_dropout": 0.5,
         "out_mlp_norm": True,
     }
+    model_kwargs.update(model_extra_args or {})
+    return ECGHiTNeXt(**model_kwargs)
 
-    model_kwargs.update(model_extra_args)
 
+def create_task(
+    *,
+    model: nn.Module,
+    h5_path: Path | str,
+    csv_path: Path | str,
+    task_extra_args: dict | None = None,
+    n_train_samples: int | None = None,
+    n_val_samples: int | None = None,
+    n_test_samples: int | None = None,
+    world_size: int = 1,
+) -> ECGMultilabelClassification:
     task_kwargs = {
         "h5_path": h5_path,
         "csv_path": csv_path,
-        "ecg_size": ecg_size,
-        "target_cols": target_cols,
+        "ecg_size": ECGMultilabelClassification.ECG_SIZE,
+        "target_cols": list(ECGMultilabelClassification.TARGET_CLF_COLUMNS),
         "criterion": torch.nn.BCEWithLogitsLoss(),
-        "model": ECGHiTNeXt(**model_kwargs),
+        "model": model,
         "n_train_samples": n_train_samples,
         "n_val_samples": n_val_samples,
         "n_test_samples": n_test_samples,
@@ -87,11 +87,5 @@ def clf_config(
         "final_wd": 1e-3,
         "warmup_epochs": 5,
     }
-
-    task_kwargs.update(task_extra_args)
+    task_kwargs.update(task_extra_args or {})
     return ECGMultilabelClassification(**task_kwargs)
-
-
-tasks = {
-    "clf": clf_config,
-}

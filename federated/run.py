@@ -4,15 +4,17 @@ import argparse
 import gc
 import json
 import os
+from functools import partial
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.multiprocessing as mp
 
+from tasks import get_task_definition
 from utils import parse_args_json, set_seed
 
-from .config import FederatedConfig, make_client_configs
+from .client import FederatedClient
+from .config import ClientConfig, FederatedConfig, create_client_configs
 from .distributed import cleanup_ddp, setup_ddp
 from .server import FederatedServer
 
@@ -27,18 +29,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--client-fraction", type=float, default=1.0)
     parser.add_argument("--clients-per-round", type=int, default=None)
-    parser.add_argument("--aggregation", type=str, choices=["weighted", "uniform"], default="weighted")
-    parser.add_argument("--eval-every", type=int, default=0)
-    parser.add_argument("--save-every", type=int, default=1)
+    parser.add_argument(
+        "--aggregation",
+        type=str,
+        choices=["weighted", "uniform"],
+        default="weighted",
+    )
+    parser.add_argument("--keep-best", action="store_true")
+    parser.add_argument("--early-stopping", action="store_true")
+    parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--keep-client-ckpts", action="store_true")
-    parser.add_argument("--local-keep-best", action="store_true")
-    parser.add_argument("--local-early-stopping", action="store_true")
-    parser.add_argument("--no-final-eval", action="store_true")
     parser.add_argument("--resume-from", type=str, default=None)
 
     parser.add_argument("--model-extra-args", type=json.loads, default={})
     parser.add_argument("--task-extra-args", type=json.loads, default={})
-    parser.add_argument("--client-task-extra-args", type=json.loads, default={})
     parser.add_argument("--n-train-samples", type=str, default=None)
     parser.add_argument("--n-val-samples", type=str, default=None)
     parser.add_argument("--n-test-samples", type=str, default=None)
@@ -65,29 +69,23 @@ def _save_dir(args) -> Path:
     return save_dir
 
 
-def _build_config(args) -> FederatedConfig:
+def _build_config(
+    args,
+    client_configs: list[ClientConfig],
+) -> FederatedConfig:
     return FederatedConfig(
         model_name=args.model_name,
         task_name=args.task_name,
-        clients=make_client_configs(
-            clients=args.clients,
-            task_name=args.task_name,
-            n_train_samples=args.n_train_samples,
-            n_val_samples=args.n_val_samples,
-            n_test_samples=args.n_test_samples,
-            client_task_extra_args=args.client_task_extra_args,
-        ),
+        client_names=[client.name for client in client_configs],
         rounds=args.rounds,
         local_epochs=args.local_epochs,
         client_fraction=args.client_fraction,
         clients_per_round=args.clients_per_round,
         aggregation=args.aggregation,
-        eval_every=args.eval_every,
-        save_every=args.save_every,
+        keep_best=args.keep_best,
+        early_stopping=args.early_stopping,
+        patience=args.patience,
         keep_client_ckpts=args.keep_client_ckpts,
-        local_keep_best=args.local_keep_best,
-        local_early_stopping=args.local_early_stopping,
-        evaluate_final=not args.no_final_eval,
         seed=args.seed,
         save_dir=_save_dir(args),
         model_extra_args=args.model_extra_args,
@@ -110,9 +108,36 @@ def _train_worker(rank: int, world_size: int, args) -> None:
     try:
         set_seed(args.seed)
 
-        config = _build_config(args)
+        task_definition = get_task_definition(
+            args.model_name,
+            args.task_name,
+        )
+        client_configs = create_client_configs(
+            clients=args.clients,
+            n_train_samples=args.n_train_samples,
+            n_val_samples=args.n_val_samples,
+            n_test_samples=args.n_test_samples,
+        )
+        config = _build_config(args, client_configs)
+        clients = [
+            FederatedClient(
+                config=client_config,
+                task_definition=task_definition,
+                model_extra_args=config.model_extra_args,
+                task_extra_args=config.task_extra_args,
+                device=device,
+                rank=rank,
+                world_size=world_size,
+            )
+            for client_config in client_configs
+        ]
         server = FederatedServer(
             config=config,
+            clients=clients,
+            model_factory=partial(
+                task_definition.create_model,
+                model_extra_args=config.model_extra_args,
+            ),
             device=device,
             rank=rank,
             world_size=world_size,
@@ -148,6 +173,9 @@ def main() -> None:
     print(f"Clients: {args.clients}")
     print(f"Rounds: {args.rounds}")
     print(f"Local epochs: {args.local_epochs}")
+    print(f"Aggregation: {args.aggregation}")
+    print(f"Keep best: {args.keep_best}")
+    print(f"Early stopping: {args.early_stopping} (patience={args.patience})")
     print(f"Seed: {args.seed}")
 
     if world_size == 1:

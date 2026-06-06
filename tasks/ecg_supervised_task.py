@@ -7,9 +7,10 @@ from pathlib import Path
 
 import torch
 
+from tqdm import tqdm
+
 from optimizers import AdamW
 from trainers import SupervisedTrainer
-from tqdm import tqdm
 
 
 @dataclass
@@ -182,6 +183,9 @@ class ECGSupervisedTask(ABC):
 
 @dataclass
 class ECGMultilabelClassification(ECGSupervisedTask):
+    ECG_SIZE = (2560, 12)
+    TARGET_CLF_COLUMNS = ("1dAVb", "RBBB", "LBBB", "SB", "AF", "ST")
+
     def _class_preds_and_targets(
         self,
         logits: torch.Tensor,

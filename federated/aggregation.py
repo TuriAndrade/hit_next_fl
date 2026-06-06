@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 
 import torch
@@ -96,3 +97,21 @@ def fedavg_state_dicts(
         aggregated[key] = accum.to(dtype=first.dtype)
 
     return aggregated
+
+
+def aggregate_scalars(
+    values: Sequence[float],
+    weights: Sequence[float] | None = None,
+) -> float:
+    if len(values) == 0:
+        raise ValueError("At least one value is required.")
+
+    values = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Cannot aggregate non-finite values.")
+
+    if weights is None:
+        weights = [1.0 for _ in values]
+
+    normalized_weights = _normalize_weights(weights, len(values))
+    return sum(value * weight for value, weight in zip(values, normalized_weights))
