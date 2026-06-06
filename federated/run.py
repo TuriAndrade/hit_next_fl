@@ -47,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-val-samples", type=str, default=None)
     parser.add_argument("--n-test-samples", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--save-dir", type=str, default=None)
     parser.add_argument("--save-name", type=str, default=None)
 
     parser.add_argument("--master-addr", type=str, default="127.0.0.1")
@@ -60,8 +61,10 @@ def _parse_args():
 
 
 def _save_dir(args) -> Path:
-    base = Path(os.environ.get("SAVE_DIR", "experiments"))
-    save_dir = base / "federated" / f"{args.model_name}-fedavg-seed_{args.seed}"
+    save_dir = Path(os.environ.get("SAVE_DIR", "experiments"))
+
+    if args.save_dir is not None:
+        save_dir = save_dir / args.save_dir
 
     if args.save_name is not None:
         save_dir = save_dir / args.save_name

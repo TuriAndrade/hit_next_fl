@@ -35,6 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-val-samples", type=int, default=None)
     parser.add_argument("--n-test-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--save-dir", type=str, default=None)
     parser.add_argument("--save-name", type=str, default=None)
 
     # DDP
@@ -70,6 +71,18 @@ def _create_task(args, world_size: int):
 def _close_loader(loader) -> None:
     if loader is not None and hasattr(loader.dataset, "close"):
         loader.dataset.close()
+
+
+def _save_dir(args) -> Path:
+    save_dir = Path(os.environ.get("SAVE_DIR", "experiments"))
+
+    if args.save_dir is not None:
+        save_dir = save_dir / args.save_dir
+
+    if args.save_name is not None:
+        save_dir = save_dir / args.save_name
+
+    return save_dir
 
 
 def _setup_ddp(
@@ -108,14 +121,7 @@ def _train_worker(rank: int, world_size: int, args) -> None:
     torch.cuda.set_device(rank)
 
     device = f"cuda:{rank}"
-    dataset_name = canonical_dataset_name(args.dataset_name)
-    save_dir = (
-        Path(os.environ.get("SAVE_DIR", "experiments"))
-        / f"{args.model_name}-{dataset_name}-{args.task_name}-seed_{args.seed}"
-    )
-
-    if args.save_name is not None:
-        save_dir = save_dir / args.save_name
+    save_dir = _save_dir(args)
 
     task = None
     train_loader = None
