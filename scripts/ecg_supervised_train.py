@@ -37,6 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-dir", type=str, default=None)
     parser.add_argument("--save-name", type=str, default=None)
+    parser.add_argument("--no-train", action="store_true")
+    parser.add_argument("--load-path", type=str, default=None)
 
     # DDP
     parser.add_argument("--master-addr", type=str, default="127.0.0.1")
@@ -83,6 +85,12 @@ def _save_dir(args) -> Path:
         save_dir = save_dir / args.save_name
 
     return save_dir
+
+
+def _load_model_state(trainer, load_path: str, device: str) -> None:
+    checkpoint = torch.load(load_path, map_location=device)
+    state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
+    trainer.load_state_dict(state_dict)
 
 
 def _setup_ddp(
@@ -159,10 +167,8 @@ def _train_worker(rank: int, world_size: int, args) -> None:
             world_size=world_size,
         )
 
-        optimizer, lr_scheduler, wd_scheduler = task.make_optimizer(
-            trainer=trainer,
-            train_loader=train_loader,
-        )
+        if args.load_path is not None:
+            _load_model_state(trainer, args.load_path, device)
 
         if rank == 0:
             save_config(
@@ -177,15 +183,23 @@ def _train_worker(rank: int, world_size: int, args) -> None:
                 path=save_dir / "config.json",
             )
 
-        train_result = trainer.fit(
-            train_loader=train_loader,
-            criterion=task.criterion,
-            val_loader=val_loader,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            wd_scheduler=wd_scheduler,
-            **task.fit_kwargs(),
-        )
+        if args.no_train:
+            train_result = {"summary": {"skipped": True}}
+        else:
+            optimizer, lr_scheduler, wd_scheduler = task.make_optimizer(
+                trainer=trainer,
+                train_loader=train_loader,
+            )
+
+            train_result = trainer.fit(
+                train_loader=train_loader,
+                criterion=task.criterion,
+                val_loader=val_loader,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                wd_scheduler=wd_scheduler,
+                **task.fit_kwargs(),
+            )
 
         eval_summary = task.evaluate(
             trainer=trainer,
