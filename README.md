@@ -208,14 +208,6 @@ With larger local datasets, strong in-domain models can outperform the global mo
 
 The accompanying project report contains the full experimental setup, dataset statistics, cross-domain results, and discussion.
 
-## Limitations
-
-- Public datasets simulate institutions; this is not a live multi-hospital deployment.
-- No secure aggregation or differential privacy is implemented.
-- Only FedAvg-style aggregation is evaluated.
-- Cross-domain evaluation uses target-domain validation data for threshold selection.
-- Experiments focus on six labels shared across the three datasets.
-
 ## Author
 
 **Turi Rezende**  
